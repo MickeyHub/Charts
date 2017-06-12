@@ -1030,6 +1030,7 @@ open class ChartViewBase: NSUIView, ChartDataProvider, AnimatorDelegate
         {
             super.nsuiTouchesEnded(touches, withEvent: event)
         }
+        self.highlightValue(nil, callDelegate: true)
     }
     
     open override func nsuiTouchesCancelled(_ touches: Set<NSUITouch>?, withEvent event: NSUIEvent?)

@@ -29,6 +29,7 @@ open class BarLineChartViewBase: ChartViewBase, BarLineScatterCandleBubbleChartD
     fileprivate var _pinchZoomEnabled = false
     fileprivate var _doubleTapToZoomEnabled = true
     fileprivate var _dragEnabled = true
+    fileprivate var _longPresses = false
     
     fileprivate var _scaleXEnabled = true
     fileprivate var _scaleYEnabled = true
@@ -74,8 +75,10 @@ open class BarLineChartViewBase: ChartViewBase, BarLineScatterCandleBubbleChartD
     internal var _doubleTapGestureRecognizer: NSUITapGestureRecognizer!
     #if !os(tvOS)
     internal var _pinchGestureRecognizer: NSUIPinchGestureRecognizer!
+    internal var _longPressGestureRecognizer: NSUILongPressGestureRecognizer!
     #endif
     internal var _panGestureRecognizer: NSUIPanGestureRecognizer!
+    
     
     /// flag that indicates if a custom viewport offset has been set
     fileprivate var _customViewPortEnabled = false
@@ -116,13 +119,17 @@ open class BarLineChartViewBase: ChartViewBase, BarLineScatterCandleBubbleChartD
         _doubleTapGestureRecognizer = NSUITapGestureRecognizer(target: self, action: #selector(doubleTapGestureRecognized(_:)))
         _doubleTapGestureRecognizer.nsuiNumberOfTapsRequired = 2
         _panGestureRecognizer = NSUIPanGestureRecognizer(target: self, action: #selector(panGestureRecognized(_:)))
+        _longPressGestureRecognizer = NSUILongPressGestureRecognizer(target: self, action: #selector(BarLineChartViewBase.longPressGestureRecongnized(_:)))
         
         _panGestureRecognizer.delegate = self
         
+        self.addGestureRecognizer(_longPressGestureRecognizer)
         self.addGestureRecognizer(_tapGestureRecognizer)
         self.addGestureRecognizer(_doubleTapGestureRecognizer)
         self.addGestureRecognizer(_panGestureRecognizer)
         
+        _longPressGestureRecognizer.minimumPressDuration = 0.5
+        _longPressGestureRecognizer.delegate = self
         _doubleTapGestureRecognizer.isEnabled = _doubleTapToZoomEnabled
         _panGestureRecognizer.isEnabled = _dragEnabled
 
@@ -224,12 +231,6 @@ open class BarLineChartViewBase: ChartViewBase, BarLineScatterCandleBubbleChartD
         context.clip(to: _viewPortHandler.contentRect)
         renderer?.drawData(context: context)
         
-        // if highlighting is enabled
-        if (valuesToHighlight())
-        {
-            renderer?.drawHighlighted(context: context, indices: _indicesToHighlight)
-        }
-        
         context.restoreGState()
         
         renderer!.drawExtras(context: context)
@@ -253,6 +254,13 @@ open class BarLineChartViewBase: ChartViewBase, BarLineScatterCandleBubbleChartD
         _leftYAxisRenderer.renderAxisLabels(context: context)
         _rightYAxisRenderer.renderAxisLabels(context: context)
 
+        
+        //if highlighting is enabled
+        if (valuesToHighlight())
+        {
+            renderer?.drawHighlighted(context: context, indices: _indicesToHighlight)
+        }
+        
         if clipValuesToContentEnabled
         {
             context.saveGState()
@@ -526,7 +534,7 @@ open class BarLineChartViewBase: ChartViewBase, BarLineScatterCandleBubbleChartD
             return
         }
         
-        if recognizer.state == NSUIGestureRecognizerState.ended
+        if recognizer.state == .began
         {
             if !self.isHighLightPerTapEnabled { return }
             
@@ -542,6 +550,10 @@ open class BarLineChartViewBase: ChartViewBase, BarLineScatterCandleBubbleChartD
                 self.highlightValue(h, callDelegate: true)
                 self.lastHighlighted = h
             }
+        }
+        
+        if (recognizer.state == .ended) {
+            highlightValue(nil, callDelegate: true)
         }
     }
     
@@ -662,6 +674,30 @@ open class BarLineChartViewBase: ChartViewBase, BarLineScatterCandleBubbleChartD
             }
         }
     }
+    
+    @objc private func longPressGestureRecongnized(_ recognizer: NSUIPanGestureRecognizer) {
+        if (recognizer.state == .began){
+            _longPresses = true;
+            let h = getHighlightByTouchPoint(recognizer.location(in:self))
+        
+            if (h === nil || h!.isEqual(self.lastHighlighted))
+            {
+                self.highlightValue(nil, callDelegate: true)
+                self.lastHighlighted = nil
+            }
+            else
+            {
+                self.lastHighlighted = h
+                self.highlightValue(h, callDelegate: true)
+            }
+        
+        } else if (recognizer.state == .ended || recognizer.state == .cancelled) {
+            _longPresses = false
+            
+            highlightValue(nil, callDelegate: true)
+        }
+    }
+    
     #endif
     
     @objc fileprivate func panGestureRecognized(_ recognizer: NSUIPanGestureRecognizer)
@@ -679,7 +715,7 @@ open class BarLineChartViewBase: ChartViewBase, BarLineScatterCandleBubbleChartD
             //  * If we're zoomed in, then obviously we have something to drag.
             //  * If we have a drag offset - we always have something to drag
             if self.isDragEnabled &&
-                (!self.hasNoDragOffset || !self.isFullyZoomedOut)
+                (!self.hasNoDragOffset || !self.isFullyZoomedOut) && !_longPresses
             {
                 _isDragging = true
                 
@@ -758,6 +794,8 @@ open class BarLineChartViewBase: ChartViewBase, BarLineScatterCandleBubbleChartD
                 }
                 
                 _isDragging = false
+            } else {
+                highlightValue(nil, callDelegate: true)
             }
             
             if _outerScrollView !== nil
@@ -858,6 +896,13 @@ open class BarLineChartViewBase: ChartViewBase, BarLineScatterCandleBubbleChartD
             {
                 return false
             }
+            
+            if isScaleYEnabled && !_longPresses {
+                let translation = _panGestureRecognizer.velocity(in: self)
+                if translation.y > 100 || translation.y < -100 {
+                    return false
+                }
+            }
         }
         else
         {
@@ -897,11 +942,19 @@ open class BarLineChartViewBase: ChartViewBase, BarLineScatterCandleBubbleChartD
     open func gestureRecognizer(_ gestureRecognizer: NSUIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: NSUIGestureRecognizer) -> Bool
     {
         #if !os(tvOS)
-            if ((gestureRecognizer.isKind(of: NSUIPinchGestureRecognizer.self) &&
-                otherGestureRecognizer.isKind(of: NSUIPanGestureRecognizer.self)) ||
+            if (
+                (gestureRecognizer.isKind(of: NSUIPinchGestureRecognizer.self) &&
+                otherGestureRecognizer.isKind(of: NSUIPanGestureRecognizer.self))
+                ||
                 (gestureRecognizer.isKind(of: NSUIPanGestureRecognizer.self) &&
-                    otherGestureRecognizer.isKind(of: NSUIPinchGestureRecognizer.self)))
-            {
+                    otherGestureRecognizer.isKind(of: NSUIPinchGestureRecognizer.self))
+                ||
+                (gestureRecognizer.isKind(of: NSUIPanGestureRecognizer.self) &&
+                    otherGestureRecognizer.isKind(of: NSUILongPressGestureRecognizer.self))
+                ||
+                    (gestureRecognizer.isKind(of: NSUILongPressGestureRecognizer.self) &&
+                    otherGestureRecognizer.isKind(of: NSUIPanGestureRecognizer.self))
+            ){
                 return true
             }
         #endif
@@ -952,6 +1005,16 @@ open class BarLineChartViewBase: ChartViewBase, BarLineScatterCandleBubbleChartD
                 
                 return true
             }
+        }
+        
+        if (
+            (gestureRecognizer.isKind(of: NSUILongPressGestureRecognizer.self) &&
+                otherGestureRecognizer.isKind(of: NSUIPanGestureRecognizer.self))
+            ||
+            (gestureRecognizer.isKind(of: NSUIPanGestureRecognizer.self) &&
+            otherGestureRecognizer.isKind(of: NSUILongPressGestureRecognizer.self))
+        ){
+            return true
         }
         
         return false
